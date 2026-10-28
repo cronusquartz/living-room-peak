@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Living Room Peak</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    #startBtn {
+      position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 20px 32px; font-size: 22px;
+      border: none; border-radius: 14px;
+      background: #ff7a29; color: white; z-index: 10;
+    }
+    #msg {
+      position: fixed; top: 12px; left: 0; right: 0;
+      text-align: center; color: white; z-index: 10;
+      text-shadow: 0 0 6px black; font-size: 18px;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="msg"></div>
+  <button id="startBtn">Start AR</button>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    const msg = document.getElementById('msg');
+    const btn = document.getElementById('startBtn');
+
+    let renderer, scene, camera, reticle, scout;
+    let hitTestSource = null;
+    let hitTestRequested = false;
+
+    function makeScout() {
+      // A simple blocky little scout built from boxes
+      const g = new THREE.Group();
+      const skin = new THREE.MeshStandardMaterial({ color: 0xffd1a1 });
+      const shirt = new THREE.MeshStandardMaterial({ color: 0xff7a29 });
+      const pants = new THREE.MeshStandardMaterial({ color: 0x3a5ba0 });
+
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.06, 0.03), shirt);
+      body.position.y = 0.07;
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 0.04), skin);
+      head.position.y = 0.12;
+      const legL = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.04, 0.025), pants);
+      legL.position.set(-0.013, 0.02, 0);
+      const legR = legL.clone();
+      legR.position.x = 0.013;
+
+      g.add(body, head, legL, legR);
+      return g;
+    }
+
+    async function startAR() {
+      if (!navigator.xr || !(await navigator.xr.isSessionSupported('immersive-ar'))) {
+        msg.textContent = 'AR is not supported here. Open this page in Chrome on your Pixel.';
+        return;
+      }
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera();
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x888899, 1.5));
+
+      // The ring that shows where a surface was found
+      reticle = new THREE.Mesh(
+        new THREE.RingGeometry(0.06, 0.08, 32).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: 0x00ffaa })
+      );
+      reticle.matrixAutoUpdate = false;
+      reticle.visible = false;
+      scene.add(reticle);
+
+      scout = makeScout();
+      scout.visible = false;
+      scene.add(scout);
+
+      const session = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['hit-test'],
+        optionalFeatures: ['dom-overlay'],
+        domOverlay: { root: document.body }
+      });
+
+      renderer.xr.setReferenceSpaceType('local');
+      await renderer.xr.setSession(session);
+
+      btn.style.display = 'none';
+      msg.textContent = 'Point at the floor, then tap to place your scout.';
+
+      session.addEventListener('select', () => {
+        if (reticle.visible) {
+          scout.position.setFromMatrixPosition(reticle.matrix);
+          scout.visible = true;
+          msg.textContent = 'Your scout is on the mountain!';
+        }
+      });
+
+      session.addEventListener('end', () => {
+        hitTestSource = null;
+        hitTestRequested = false;
+        btn.style.display = 'block';
+      });
+
+      renderer.setAnimationLoop(render);
+    }
+
+    async function render(timestamp, frame) {
+      if (frame) {
+        const session = renderer.xr.getSession();
+        const refSpace = renderer.xr.getReferenceSpace();
+
+        if (!hitTestRequested) {
+          const viewerSpace = await session.requestReferenceSpace('viewer');
+          hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+          hitTestRequested = true;
+        }
+
+        if (hitTestSource) {
+          const hits = frame.getHitTestResults(hitTestSource);
+          if (hits.length > 0) {
+            const pose = hits[0].getPose(refSpace);
+            reticle.visible = true;
+            reticle.matrix.fromArray(pose.transform.matrix);
+          } else {
+            reticle.visible = false;
+          }
+        }
+      }
+      renderer.render(scene, camera);
+    }
+
+    btn.addEventListener('click', startAR);
+  </script>
+</body>
+</html>
